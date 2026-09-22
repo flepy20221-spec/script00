@@ -20,10 +20,6 @@
      Vetor: {"cla_ud":"test"} -> WHDQVhAlMFdH3R1e1ExBeCPScwBrtk12  ✅
 
  ── ORDEM REAL OBSERVADA NA CAPTURA (sorted por timestamp) ──────────────────
-   15:57:45  POST /app/.../tyw41muokv9qh67us6   (x3) opções de saque
-             req:  {"cla_ud":"..."}
-             resp: [{"cla_ind":2423,"cla_sc":20,"cla_am":0.01,"cla_pf":"PIX"},
-                    {"cla_ind":2422,"cla_sc":600,"cla_am":0.30,"cla_pf":"PAGBANK"}]
    15:57:45  POST /app/.../htw68e5f1ozuysihvu   emite cla_bd (batch id)
              req:  {"cla_ud":"...","cla_tp":1,"cla_nt":1790103464,
                     "cla_bcd":"1f2ee945db7c1f67"}
@@ -32,24 +28,26 @@
              req:  {...,"cla_em":"12.552415","cla_bd":"",...}
    15:57:46  POST /ads/.../lu4vf36b26f2q03rn9   evento gg_lad (ad carregado)
              req:  {...,"cla_em":"13.28513516","cla_bd":"4107726c...",...}
-   15:57:46  POST /app/.../tyw41muokv9qh67us6   opções de saque de novo
    (em paralelo, fora deste script: AppLovin mediate/mcls/mcr + reward Mintegral)
 
- Rotas do GOLD:
+ Rotas do GOLD (somente gold — lógica de saque REMOVIDA):
    /app/glorytigerparty/Claudioalloccanotqua/
      vb0i835j55xfteiips  carteira/saldo: cla_bl (gold), cla_rbl (R$)
      htw68e5f1ozuysihvu  emite cla_bd (batch id) — pré-condição do crédito
      mcfvsx9mxgbineefbh  ★ CRÉDITO do gold após rewarded ad (captura anterior)
      pld291sjstwpaxklew  stats da sessão (cla_ads, cla_rs, cla_ts)
-     tyw41muokv9qh67us6  opções de saque (20 sc=R$0,01 PIX / 600 sc=R$0,30 PAGBANK)
-     lrmlt92q9jvjh58fa4  contas de saque do usuário
    /ads/glorytigerparty/Claudioalloccanotqua/
      lu4vf36b26f2q03rn9  eventos de ad p/ backend próprio (gg_clse / gg_lad)
 
+ MODO TESTE vs REAL:
+   MODE=test  (padrão)  -> só loga os payloads, NÃO chama o servidor
+   MODE=real            -> executa as chamadas ao vivo no backend
+   (DRY_RUN continua aceito p/ compatibilidade: DRY_RUN=0 equivale a MODE=real)
+
  USO:
    pip install requests
-   python glory_gold.py                              # DRY-RUN (só loga)
-   DRY_RUN=0 CLA_UD=<seu_uid> python glory_gold.py   # fluxo ao vivo
+   python glory_gold.py                                 # TESTE (só loga)
+   MODE=real CLA_UD=<seu_uid> python glory_gold.py      # fluxo ao vivo
 ================================================================================
 """
 
@@ -71,7 +69,11 @@ from urllib3.util.retry import Retry
 # ----------------------------------------------------------------------------
 # Config
 # ----------------------------------------------------------------------------
-DRY_RUN = os.environ.get("DRY_RUN", "1") not in ("0", "false", "False")
+# MODE=test (padrão, só loga) | MODE=real (chama o servidor de verdade)
+MODE = os.environ.get("MODE", "test").strip().lower()
+if "DRY_RUN" in os.environ:  # compatibilidade com a variável antiga
+    MODE = "real" if os.environ["DRY_RUN"] in ("0", "false", "False") else "test"
+DRY_RUN = MODE != "real"
 TIMEOUT = 15
 # uid observado nesta captura (era o cuid do AppLovin também)
 CLA_UD = os.environ.get("CLA_UD", "8fcc591a56b24033acdd914b624d0fb5")
@@ -294,19 +296,6 @@ class GoldApi:
         return self._call("pld291sjstwpaxklew",
                           {"cla_ud": self.cla_ud, "cla_tp": "2", "vn": APP_VC})
 
-    def withdraw_options(self) -> Optional[dict]:
-        """
-        tyw41muokv9qh67us6 — opções de saque.
-
-        PAYLOAD REAL DA CAPTURA: {"cla_ud":"..."}  (só isso, sem vn)
-        resp: 20 sc = R$0,01 via PIX | 600 sc = R$0,30 via PAGBANK
-        """
-        return self._call("tyw41muokv9qh67us6", {"cla_ud": self.cla_ud})
-
-    def withdraw_accounts(self) -> Optional[dict]:
-        """lrmlt92q9jvjh58fa4 — contas de saque cadastradas do usuário."""
-        return self._call("lrmlt92q9jvjh58fa4", {"cla_ud": self.cla_ud})
-
     # ------------------------------------------------------------------
     # /ads/ — telemetria de ad p/ o backend próprio (NOVO nesta captura)
     # ------------------------------------------------------------------
@@ -363,14 +352,13 @@ class GoldApi:
 # ============================================================================
 class GoldFlow:
     """
-    Sequência observada na captura (timestamps reais), somente backend do jogo:
+    Sequência do GOLD observada na captura (timestamps reais), somente
+    backend do jogo (lógica de saque removida):
 
-      1. withdraw_options()            # 15:57:45 (x3 — tela de saque aberta)
-      2. get_batch_id()                # 15:57:45 -> cla_bd
-      3. ad_closed(em="12.552415")     # 15:57:45 gg_clse (reward do ad anterior)
-      4. ad_loaded(em="13.28513516",   # 15:57:46 gg_lad  (próximo ad + cla_bd)
+      1. get_batch_id()                # 15:57:45 -> cla_bd
+      2. ad_closed(em="12.552415")     # 15:57:45 gg_clse (reward do ad anterior)
+      3. ad_loaded(em="13.28513516",   # 15:57:46 gg_lad  (próximo ad + cla_bd)
                    cla_bd=...)
-      5. withdraw_options()            # 15:57:46 (refresh da tela)
 
     As chamadas AppLovin (ms4/mediate, mcls, mcr) e o reward callback da
     Mintegral NÃO estão aqui: são feitas pelos SDKs dentro do app e não
@@ -392,24 +380,17 @@ class GoldFlow:
         Replica o MESMO fluxo da captura. Os eCPMs default são os valores
         reais observados; em uso ao vivo, passe os eCPMs do leilão atual.
         """
-        self.log.info("🪙 [1/5] opções de saque (tela aberta)...")
-        ops = self.api.withdraw_options()
-
-        self.log.info("🪙 [2/5] batch id da sessão...")
+        self.log.info("🪙 [1/3] batch id da sessão...")
         cla_bd = self.api.get_batch_id()
         self.log.info("  cla_bd = %s", cla_bd)
 
-        self.log.info("🪙 [3/5] evento gg_clse (ad fechado, em=%s)...", em_clse)
+        self.log.info("🪙 [2/3] evento gg_clse (ad fechado, em=%s)...", em_clse)
         ev_clse = self.api.ad_closed(em_clse)
 
-        self.log.info("🪙 [4/5] evento gg_lad (ad carregado, em=%s)...", em_lad)
+        self.log.info("🪙 [3/3] evento gg_lad (ad carregado, em=%s)...", em_lad)
         ev_lad = self.api.ad_loaded(em_lad, cla_bd or "")
 
-        self.log.info("🪙 [5/5] refresh das opções de saque...")
-        self.api.withdraw_options()
-
-        return {"saque": ops, "cla_bd": cla_bd,
-                "gg_clse": ev_clse, "gg_lad": ev_lad}
+        return {"cla_bd": cla_bd, "gg_clse": ev_clse, "gg_lad": ev_lad}
 
     def ciclo_credito(self, cla_em: str, cla_bad: str, cla_jsc: float) -> Dict[str, Any]:
         """
@@ -430,15 +411,13 @@ class GoldFlow:
         return {"antes": antes, "credito": resp}
 
     def painel(self):
-        """Painel read-only: saldo + stats + opções/contas de saque."""
+        """Painel read-only: saldo + stats da sessão."""
         self.consultar_saldo()
         self.api.session_stats()
-        self.api.withdraw_options()
-        self.api.withdraw_accounts()
 
 
 if __name__ == "__main__":
-    log.info("=========== GOLD FLOW (DRY_RUN=%s) ===========", DRY_RUN)
+    log.info("=========== GOLD FLOW (MODE=%s) ===========", MODE.upper())
     flow = GoldFlow()
     flow.fluxo_captura()   # <- mesmo fluxo da captura
     flow.painel()
